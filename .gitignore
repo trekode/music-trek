@@ -1,0 +1,28 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.env/
+env/
+.venv/
+
+# Editor / IDE files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Backup / temporary files
+*~
+*.log
+
+# Unused files
+track_item_widget_blur.py
+
+# Qt / PyQt Designer temporary files
+*.py~
+*.qrc~
+*.ui~
