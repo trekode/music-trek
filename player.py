@@ -19,7 +19,7 @@ class Player(QObject):
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
         self.player.setAudioOutput(self.audio_output)
-        self.audio_output.setVolume(1.0)
+        self.audio_output.setVolume(0.70)
 
         self.original_track_list = []
         self.track_list = []

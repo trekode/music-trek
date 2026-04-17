@@ -20,7 +20,7 @@ env/
 *.log
 
 # Unused files
-track_item_widget_blur.py
+old/
 
 # Qt / PyQt Designer temporary files
 *.py~

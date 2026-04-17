@@ -2,19 +2,21 @@ import sys
 import os
 from pathlib import Path
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLabel, QPushButton, QDockWidget, QStatusBar, QWidget, \
-    QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QStyleFactory, QSizePolicy, QSlider, QFileDialog, \
-    QSpacerItem
+    QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QStyleFactory, QSizePolicy, QSlider, QMenu
 from PyQt6.QtGui import QPixmap, QAction, QKeySequence, QPainter, QFont
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QStandardPaths, QPoint, QEvent, QTimer
 from PyQt6.QtWidgets import QFileDialog
-from PyQt6.QtCore import QStandardPaths
 from mutagen import File
-from track_item_widget import TrackItemWidget
 from clickable_slider import ClickableSlider
+from marquee_label import MarqueeLabel
+from custom_tab_widget import CustomTabWidget
+from track_item_widget import TrackItemWidget
+from dock_title_bar import DockTitleBar
+from floating_volume_panel import FloatingVolumePanel
 from player import Player
 
 
-SONG_NAME_FONT = QFont("Dubai", 14)
+TRACK_NAME_FONT = QFont("Dubai", 14)
 AUDIO_EXTENSIONS = (".mp3", ".wav", ".flac", ".ogg", ".m4a")
 
 
@@ -28,24 +30,27 @@ class MainWindow(QMainWindow):
         self.player.shuffle_state_changed.connect(self.update_shuffle_button)
         self.player.volume_state_changed.connect(self.update_volume_button)
         self.player.track_changed.connect(self.update_current_track)
-
-        self.inicialize_ui()
-        self.status_bar = QStatusBar()
-
-        self.setStatusBar(self.status_bar)
+        self.player.playlist_changed.connect(self.update_queue_list)
 
         self.current_music_folder = ""
         self.track_paths_list = []
+        self.list_view_mode = "original"
+        self.current_main_size = "L"
+        self.volume = round(self.player.audio_output.volume()*100)
 
+        self._bg_pixmap = QPixmap("./images/background.jpg")
+        self._bg_scaled = None
+        self._bg_size = None
 
-        with open("styles.css", "r") as file:
-            style = file.read()
-        self.setStyleSheet(style)
+        self.inicialize_ui()
+
+        self.create_status_bar()
+
+        QApplication.instance().installEventFilter(self)
         
 
     def inicialize_ui(self):
-        self.setGeometry(200,100,950,550)
-        self.setMinimumHeight(188)
+        self.setGeometry(200,100,918,518)
         self.setWindowTitle("Trek Music")
         self.generate_main_window()
         self.create_dock()
@@ -54,93 +59,147 @@ class MainWindow(QMainWindow):
         self.show()
 
 
+    def create_status_bar(self):
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.update_status_bar()
+
+
     def generate_main_window(self):
         # WIDGETS
 
         self.main_widget = QWidget()
+        self.main_widget.installEventFilter(self)
 
         self.player_image = QLabel()
         self.player_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.player_image.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.player_image.setContentsMargins(0,0,0,0)
         self.original_pixmap = QPixmap("./images/player_image.jpg")
 
         self.slider = ClickableSlider(Qt.Orientation.Horizontal, self)
+        self.slider.setStyle(QStyleFactory.create("Fusion"))
         self.slider.setRange(0, 100)
         self.slider.setValue(0)
         self.slider.setEnabled(False)
         self.slider.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.slider.setFixedHeight(15)
+        self.slider.setFixedHeight(17)
         self.player.duration_changed.connect(lambda dur: (self.slider.setRange(0, dur), self.slider.setEnabled(True)))
         self.player.position_changed.connect(lambda pos: self.slider.setValue(pos))
         self.slider.sliderMoved.connect(lambda pos: self.player.set_position(pos))
 
-        self.track_name = QLabel()
-        self.track_name.setFont(SONG_NAME_FONT)
-        self.track_name.setObjectName("song_name")
-        self.track_name.setMinimumWidth(136)
+        self.track_name = MarqueeLabel()
+        self.track_name.setFont(TRACK_NAME_FONT)
+        self.track_name.setObjectName("track_name")
         self.track_name.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.track_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.track_name.setContentsMargins(0,0,0,0)
 
-        reproduction_buttons_container = self.generate_reproduction_buttons()
+        self.reproduction_buttons_container = self.generate_reproduction_buttons()
 
         self.volume_button = QPushButton()
         self.volume_button.setObjectName("volume_button")
+        self.volume_button.setToolTip("Mute")
         self.volume_button.clicked.connect(self.handle_volume_button_click)
         self.volume_button.setFixedSize(30, 30)
 
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 100)
-        self.volume_slider.setValue(int(self.player.audio_output.volume() * 100))  # Valor inicial
+        self.volume_slider.setValue(self.volume)  # Valor inicial
         self.volume_slider.setFixedWidth(100)
-        self.volume_slider.setToolTip("Volume")
+        self.volume_slider.setToolTip(f"Volume: {self.volume}%")
         self.volume_slider.valueChanged.connect(self.change_volume)
+
+        self.volume_toggle_button = QPushButton()
+        self.volume_toggle_button.setObjectName("volume_toggle_button")
+        self.volume_toggle_button.setToolTip("Open volume slider")
+        self.volume_toggle_button.clicked.connect(self.toggle_floating_volume_slider)
+        self.volume_toggle_button.setFixedSize(20, 30)
+        self.volume_toggle_button.hide()
+
+        self.floating_volume_slider = QSlider(Qt.Orientation.Vertical)
+        self.floating_volume_slider.setToolTip(f"Volume: {self.volume}%")
+
+        self.floating_volume_slider.setRange(0, 100)
+        self.floating_volume_slider.setValue(int(self.player.audio_output.volume() * 100))
+        self.floating_volume_slider.setFixedHeight(100)
+        self.floating_volume_slider.valueChanged.connect(self.change_volume)
+
+        self.floating_volume_panel = FloatingVolumePanel()
+        self.floating_volume_panel.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
+        self.floating_volume_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.floating_volume_panel.closed.connect(self.on_volume_panel_closed)
+
+        self.floating_volume_panel_layout = QVBoxLayout(self.floating_volume_panel)
+        self.floating_volume_panel_layout.setContentsMargins(3, 8, 3, 8)
+        self.floating_volume_panel_layout.addWidget(self.floating_volume_slider)
+        self.floating_volume_panel.hide()
 
         # LAYOUT
 
         self.setCentralWidget(self.main_widget)
 
-        main_layout = QVBoxLayout()
-        self.main_widget.setLayout(main_layout)
+        self.main_layout = QVBoxLayout()
+        self.main_widget.setLayout(self.main_layout)
 
-        slider_hbox = QHBoxLayout()
-        slider_hbox.setContentsMargins(7, 0, 7, 0)
-        slider_hbox.addWidget(self.slider)
+        slider_layout = QVBoxLayout()
+        slider_layout.setContentsMargins(9, 0, 9, 7)
+        slider_layout.addStretch()
+        slider_layout.addWidget(self.slider)
         slider_container = QWidget()
-        slider_container.setLayout(slider_hbox)
+        slider_container.setLayout(slider_layout)
 
-        volume_layout = QHBoxLayout()
-        volume_layout.setContentsMargins(0,0,0,0)
-        volume_layout.addWidget(self.volume_button)
-        volume_layout.addWidget(self.volume_slider)
+        self.track_inner_container = QWidget()
+        self.track_inner_container.setMinimumWidth(40)
+        self.track_inner_layout = QVBoxLayout()
+        self.track_inner_layout.setContentsMargins(0, 0, 0, 0)
+        self.track_inner_container.setLayout(self.track_inner_layout)
+
+        self.track_inner_layout.addStretch()
+        self.track_inner_layout.addWidget(self.track_name)
+        self.track_inner_layout.addStretch()
+
+        self.track_outer_container = QWidget()
+        self.track_outer_container.setMinimumWidth(136)
+        self.track_outer_layout = QHBoxLayout(self.track_outer_container)
+        self.track_outer_layout.setContentsMargins(0,0,0,0)
+        self.track_outer_layout.addWidget(self.track_inner_container)
+        self.track_outer_layout.addStretch()
+
+        self.volume_layout = QHBoxLayout()
+        self.volume_layout.setContentsMargins(0,0,0,0)
+        self.volume_layout.addStretch(5)
+        self.volume_layout.addWidget(self.volume_button)
+        self.volume_layout.addWidget(self.volume_toggle_button)
+        self.volume_layout.addWidget(self.volume_slider)
+        self.volume_layout.setSpacing(5)
         volume_container = QWidget()
-        volume_container.setLayout(volume_layout)
+        volume_container.setLayout(self.volume_layout)
 
-        bottom_layout = QHBoxLayout()
-        bottom_layout.setContentsMargins(0,0,0,0)
+        self.bottom_layout = QHBoxLayout()
+        self.bottom_layout.setContentsMargins(10,0,10,0)
+        self.bottom_layout.setSpacing(10)
 
-        bottom_layout.addWidget(self.track_name, 2)
-        bottom_layout.addStretch()
-        bottom_layout.addWidget(reproduction_buttons_container, 6)
-        bottom_layout.addStretch()
-        bottom_layout.addWidget(volume_container, 2)
+        self.bottom_layout.addWidget(self.track_outer_container, 1)
+        self.bottom_layout.addStretch()
+        self.bottom_layout.addWidget(self.reproduction_buttons_container)
+        self.bottom_layout.addStretch()
+        self.bottom_layout.addWidget(volume_container, 1)
         self.bottom_container = QWidget()
-        self.bottom_container.setLayout(bottom_layout)
+        self.bottom_container.setLayout(self.bottom_layout)
 
         image_container_layout = QHBoxLayout()
         image_container_layout.addWidget(self.player_image)
-        image_container = QWidget()
-        image_container.setContentsMargins(0,0,0,0)
-        image_container.setLayout(image_container_layout)
+        self.image_container = QWidget()
+        self.image_container.setContentsMargins(0,0,0,0)
+        self.image_container.setLayout(image_container_layout)
 
-        player_layout = QVBoxLayout()
-        player_layout.setContentsMargins(0, 20, 0, 10)
-        player_layout.setSpacing(0)
-        player_layout.addWidget(image_container, stretch=1)
-        player_layout.addWidget(slider_container, stretch=0)
-        player_layout.addWidget(self.bottom_container, stretch=0)
-        self.player_container = QWidget()
-        self.player_container.setLayout(player_layout)
-
-        main_layout.addWidget(self.player_container)
+        self.main_layout.setContentsMargins(5, 7, 5, 15)
+        self.main_layout.setSpacing(0)
+        self.main_layout.addWidget(self.image_container, stretch=1)
+        self.main_layout.addStretch(0)
+        self.main_layout.addWidget(slider_container, stretch=0)
+        self.main_layout.addWidget(self.bottom_container, stretch=0)
 
 
     def generate_reproduction_buttons(self):
@@ -174,10 +233,12 @@ class MainWindow(QMainWindow):
 
         self.repeat_button = QPushButton()
         self.repeat_button.setObjectName("repeat_button")
+        self.repeat_button.setToolTip("Repeat")
         self.repeat_button.clicked.connect(self.handle_repeat_click)
 
         self.shuffle_button = QPushButton()
         self.shuffle_button.setObjectName("shuffle_button")
+        self.shuffle_button.setToolTip("Shuffle")
         self.shuffle_button.clicked.connect(self.handle_shuffle_click)
 
         self.play_pause_button.setFixedSize(50, 50)
@@ -203,6 +264,7 @@ class MainWindow(QMainWindow):
         buttons_hbox.addWidget(self.repeat_button)
 
         buttons_container = QWidget()
+        buttons_container.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         buttons_container.setObjectName("buttons_container")
         buttons_container.setLayout(buttons_hbox)
 
@@ -211,24 +273,24 @@ class MainWindow(QMainWindow):
 
     def create_action(self):
         self.open_files_action = QAction("Open Files", self)
-        self.open_files_action.setShortcut(QKeySequence("Ctrl+F"))
-        self.open_files_action.setStatusTip("Open music files to add to the playlist")
+        self.open_files_action.setShortcut(QKeySequence("Ctrl+O"))
+        self.open_files_action.hovered.connect(lambda: self.update_status_bar("Select music files and add them to the playlist"))
         self.open_files_action.triggered.connect(self.open_files)
 
         self.open_folder_action = QAction("Open Folder", self)
-        self.open_folder_action.setShortcut(QKeySequence("Ctrl+O"))
-        self.open_folder_action.setStatusTip("Open a folder with a playlist")
+        self.open_folder_action.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        self.open_folder_action.hovered.connect(lambda: self.update_status_bar("Open a folder and scan subfolders for music files"))
         self.open_folder_action.triggered.connect(self.open_folder)
 
-        self.view_playlist_action = QAction("View Playlist", self, checkable=True)
+        self.view_playlist_action = QAction("Playlist Panel", self, checkable=True)
         self.view_playlist_action.setShortcut(QKeySequence("Ctrl+L"))
-        self.view_playlist_action.setStatusTip("Show/Hide Playlist")
+        self.view_playlist_action.hovered.connect(lambda: self.update_status_bar("Show or hide the playlist panel"))
         self.view_playlist_action.triggered.connect(self.view_playlist)
         self.view_playlist_action.setChecked(True)
 
-        self.view_player_image_action = QAction("View Player Image", self, checkable=True)
+        self.view_player_image_action = QAction("Player Image", self, checkable=True)
         self.view_player_image_action.setShortcut(QKeySequence("Ctrl+I"))
-        self.view_player_image_action.setStatusTip("Show/Hide Player Image")
+        self.view_player_image_action.hovered.connect(lambda: self.update_status_bar("Show or hide the player image"))
         self.view_player_image_action.triggered.connect(self.view_player_image)
         self.view_player_image_action.setChecked(True)
 
@@ -236,35 +298,47 @@ class MainWindow(QMainWindow):
     def create_menu(self):
         self.menuBar().setStyle(QStyleFactory.create("Fusion"))
 
-        open_menu = self.menuBar().addMenu("Open")
-        open_menu.addAction(self.open_files_action)
-        open_menu.addAction(self.open_folder_action)
+        file_menu = self.menuBar().addMenu("File")
+        file_menu.addAction(self.open_files_action)
+        file_menu.addAction(self.open_folder_action)
+        file_menu.installEventFilter(self)
 
         view_menu = self.menuBar().addMenu("View")
         view_menu.addAction(self.view_playlist_action)
         view_menu.addAction(self.view_player_image_action)
+        view_menu.installEventFilter(self)
 
 
     def create_dock(self):
-        self.playlist = QListWidget() 
+        self.playlist = QListWidget()
+        self.queue_list = QListWidget()
         self.playlist.itemDoubleClicked.connect(self.handle_track_double_click)
-        
+        self.queue_list.itemDoubleClicked.connect(self.handle_track_double_click)
+
+        tab_widget = CustomTabWidget([["Library", self.playlist, "Original order (never modified)"], ["Queue", self.queue_list, "Current playback order"]])
+        tab_widget.setObjectName("custom_tab_widget")
+
         self.dock = QDockWidget()
-        self.dock.setWindowTitle("Playlist")
+        self.dock_title_bar = DockTitleBar(self.dock, "Playlist")
+        self.dock.setTitleBarWidget(self.dock_title_bar)
         self.dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
 
-        self.dock.setWidget(self.playlist)
+        self.dock.setWidget(tab_widget)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.dock)
         self.dock.visibilityChanged.connect(self.sync_view_playlist_action)
+        self.dock.topLevelChanged.connect(self.sync_float_button)
 
     
     def view_playlist(self):
         if self.view_playlist_action.isChecked():
             self.dock.show()
-            self.update_pixmap()
         else:
             self.dock.hide()
-            self.update_pixmap()
+        self.update_status_bar()
+
+
+    def sync_float_button(self):
+        self.dock_title_bar.float_btn.setChecked(self.dock.isFloating())
 
 
     def sync_view_playlist_action(self, visible):
@@ -276,6 +350,7 @@ class MainWindow(QMainWindow):
             self.player_image.show()
         else:
             self.player_image.hide()
+        self.update_status_bar()
 
 
     def open_files(self):
@@ -291,6 +366,7 @@ class MainWindow(QMainWindow):
         )
 
         if not files:
+            self.update_status_bar()
             return
 
         self._add_tracks(files)
@@ -301,6 +377,7 @@ class MainWindow(QMainWindow):
         initial_dir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.MusicLocation)
         folder = QFileDialog.getExistingDirectory(None, "Select a folder", initial_dir)
         if not folder:
+            self.update_status_bar()
             return
 
         track_paths_list = []
@@ -320,7 +397,24 @@ class MainWindow(QMainWindow):
         self.playlist.clear()
         self.track_paths_list.clear()
 
+        self.populate_dock_list(self.playlist, paths)
+
         for track_path in paths:
+            self.track_paths_list.append(track_path)
+
+        if self.track_paths_list:
+            self.player.set_tracks(self.track_paths_list)
+            self.update_buttons_style()
+
+        self.populate_dock_list(self.queue_list, self.player.track_list)
+        self.highlight_current_track(self.player.get_current_track_path())
+
+
+    def populate_dock_list(self, list_widget, paths_list):
+
+        list_widget.clear()
+
+        for track_path in paths_list:
             audio = File(track_path)
             if audio is None or audio.info is None:
                 continue
@@ -332,14 +426,13 @@ class MainWindow(QMainWindow):
             widget = TrackItemWidget(os.path.basename(track_path), duration_str, track_path)
             item.setSizeHint(widget.sizeHint())
 
-            self.playlist.addItem(item)
-            self.playlist.setItemWidget(item, widget)
+            list_widget.addItem(item)
+            list_widget.setItemWidget(item, widget)
 
-            self.track_paths_list.append(track_path)
 
-        if self.track_paths_list:
-            self.player.set_tracks(self.track_paths_list)
-            self.update_buttons_style()
+    def update_queue_list(self, new_list):
+        self.populate_dock_list(self.queue_list, new_list)
+        self.highlight_current_track(self.player.get_current_track_path())
 
 
     def handle_play_pause_click(self):
@@ -348,15 +441,19 @@ class MainWindow(QMainWindow):
 
     def update_play_pause_button(self, is_playing):
         if is_playing:
+            self.play_pause_button.setToolTip("Pause")
             self.play_pause_button.setStyleSheet(
                 "image: url(./images/pause.png);"
                 "padding: 10px 10px 10px 11px"
             )
         else:
+            self.play_pause_button.setToolTip("Play")
             self.play_pause_button.setStyleSheet(
                 "image: url(./images/play_enabled.png);"
                 "padding: 8px 8px 8px 12px"
             )
+
+        self.update_status_bar()
 
 
     def handle_shuffle_click(self):
@@ -369,10 +466,13 @@ class MainWindow(QMainWindow):
         else:
             self.shuffle_button.setStyleSheet("image: url(./images/shuffle_off.png)")
 
+        self.update_status_bar()
+
 
     def handle_repeat_click(self):
         self.player.toggle_repeat()
         self.repeat_button.setStyleSheet(f"image: url(./images/repeat_{self.player.repeat}.png);")
+        self.update_status_bar()
 
 
     def handle_volume_button_click(self):
@@ -380,37 +480,79 @@ class MainWindow(QMainWindow):
 
 
     def update_volume_button(self, is_muted):
-        if is_muted:
-            self.volume_button.setStyleSheet("image: url(./images/volume_off.png)")
+        icon = "volume_off.png" if is_muted else "volume_on.png"
+        tooltip = "Unmute" if is_muted else "Mute"
+
+        if self.current_main_size[0] == "L":
+            radius_left = "15px"
+            radius_right = "15px"
+            padding = "7px"
         else:
-            self.volume_button.setStyleSheet("image: url(./images/volume_on.png)")
+            radius_left = "10px"
+            radius_right = "3px"
+            padding = "7px 3px"
+
+        self.volume_button.setToolTip(tooltip)
+        self.volume_button.setStyleSheet(
+            f"border-radius: {radius_right};"
+            f"border-top-left-radius: {radius_left};"
+            f"border-bottom-left-radius: {radius_left};"
+            f"padding: {padding};"
+            f"image: url(./images/{icon})"
+        )
+
+        self.update_status_bar()
+
 
 
     def change_volume(self, value):
-        self.player.change_volume(value/100)
+        self.player.audio_output.setVolume(value / 100)
+        self.sync_volume_sliders(value)
+        self.volume = value
+        self.volume_slider.setToolTip(f"Volume: {self.volume}%")
+        self.floating_volume_slider.setToolTip(f"Volume: {self.volume}%")
+        self.update_status_bar()
+
+
+    def sync_volume_sliders(self, value):
+        self.volume_slider.blockSignals(True)
+        self.floating_volume_slider.blockSignals(True)
+
+        self.volume_slider.setValue(value)
+        self.floating_volume_slider.setValue(value)
+
+        self.volume_slider.blockSignals(False)
+        self.floating_volume_slider.blockSignals(False)
 
 
     def update_current_track(self, current_track):
         self.track_name.setText(Path(current_track).stem)
+        self.track_name.setStyleSheet("background-color: rgba(5, 1, 20, 0.3);")
         self.highlight_current_track(current_track)
 
 
     def highlight_current_track(self, current_track):
-        for i in range(self.playlist.count()):
-            item = self.playlist.item(i)
-            widget = self.playlist.itemWidget(item)
+        for widgets_list in [self.playlist, self.queue_list]:
+            if widgets_list:
+                for i in range(widgets_list.count()):
+                    item = widgets_list.item(i)
+                    widget = widgets_list.itemWidget(item)
 
-            if widget.track_path == current_track:
-                widget.title_label.setGlowEnabled(enabled=True)
-                widget.duration_label.setGlowEnabled(enabled=True)
-            else:
-                widget.title_label.setGlowEnabled(enabled=False)
-                widget.duration_label.setGlowEnabled(enabled=False)
+                    if widget.track_path == current_track:
+                        widget.title_label.setGlowEnabled(enabled=True)
+                        widget.duration_label.setGlowEnabled(enabled=True)
+                    else:
+                        widget.title_label.setGlowEnabled(enabled=False)
+                        widget.duration_label.setGlowEnabled(enabled=False)
 
 
     def handle_track_double_click(self, item):
         widget = self.playlist.itemWidget(item)
-        self.player.set_track_by_path(widget.track_path)
+        if widget is None:
+            widget = self.queue_list.itemWidget(item)
+
+        if widget:
+            self.player.set_track_by_path(widget.track_path)
 
 
     def update_buttons_style(self):
@@ -418,68 +560,298 @@ class MainWindow(QMainWindow):
             self.play_pause_button.setEnabled(True)
             self.next_button.setEnabled(True)
             self.next_button.setStyleSheet("image: url(./images/next_enabled.png)")
+            self.next_button.setToolTip("Next Track")
             self.previous_button.setEnabled(True)
             self.previous_button.setStyleSheet("image: url(./images/previous_enabled.png)")
+            self.previous_button.setToolTip("Previous Track")
             self.ten_forward_button.setEnabled(True)
             self.ten_forward_button.setStyleSheet("image: url(./images/ten_forward_enabled.png)")
+            self.ten_forward_button.setToolTip("Forward 10 seconds")
             self.ten_backward_button.setEnabled(True)
             self.ten_backward_button.setStyleSheet("image: url(./images/ten_backward_enabled.png)")
+            self.ten_backward_button.setToolTip("Backward 10 seconds")
 
         else:
             self.play_pause_button.setEnabled(False)
             self.next_button.setEnabled(False)
+            self.next_button.setToolTip("")
             self.previous_button.setEnabled(False)
+            self.previous_button.setToolTip("")
             self.ten_forward_button.setEnabled(False)
+            self.ten_forward_button.setToolTip("")
             self.ten_backward_button.setEnabled(False)
+            self.ten_backward_button.setToolTip("")
 
 
-    def update_pixmap(self):
+    def toggle_floating_volume_slider(self):
+        if self.floating_volume_panel.isVisible():
+            self.floating_volume_panel.hide()
+            self.on_volume_panel_closed()
+            return
+
+        self.floating_volume_panel.is_open = True
+
+        button_pos = self.volume_button.mapToGlobal(QPoint(0, 0))
+
+        self.floating_volume_panel.adjustSize()
+
+        x = button_pos.x() + (self.volume_button.width() - self.floating_volume_panel.width()) // 2
+        y = button_pos.y() - self.floating_volume_panel.height() - 5
+
+        self.floating_volume_panel.move(x, y)
+        self.floating_volume_panel.show()
+        self.floating_volume_panel.raise_()
+
+        self.volume_toggle_button.setStyleSheet("image: url(./images/arrow-down)")
+        self.volume_toggle_button.setToolTip("Close volume slider")
+
+
+    def on_volume_panel_closed(self):
+        self.volume_toggle_button.setStyleSheet("image: url(./images/arrow-up)")
+        self.volume_toggle_button.setToolTip("Open volume slider")
+
+
+    def update_status_bar(self, status_tip=None):
+        permanent_parts = []
+
+        if self.player.current_track_index is not None:
+            permanent_parts.append("Playing" if self.player.is_playing else "Paused")
+
+        permanent_parts.append(f"Volume: {self.volume}%")
+        permanent_parts.append(f"Muted: {'on' if self.player.is_muted else 'off'}")
+        permanent_parts.append(f"Shuffle: {'on' if self.player.is_shuffle_on else 'off'}")
+        permanent_parts.append(f"Repeat: {self.player.repeat}")
+
+        permanent_text = "   |   ".join(permanent_parts)
+
+        if status_tip:
+            full_text = f"{status_tip}   •   {permanent_text}"
+        else:
+            full_text = permanent_text
+
+        self.status_bar.showMessage(full_text)
+
+
+    def event(self, event):
+        if event.type() == QEvent.Type.StatusTip:
+            return True
+
+        return super().event(event)
+
+
+    def eventFilter(self, obj, event):
+        if obj == self.main_widget and event.type() == QEvent.Type.Resize:
+            self.update_responsive_ui()
+
+        if event.type() == QEvent.Type.Leave:
+            if isinstance(obj, QMenu):
+                self.update_status_bar("")
+
+        if event.type() == QEvent.Type.MouseButtonPress:
+            if self.floating_volume_panel.isVisible():
+
+                global_pos = event.globalPosition().toPoint()
+
+                # If click is inside the floating panel → do nothing
+                if self.floating_volume_panel.frameGeometry().contains(global_pos):
+                    return False
+
+                # If click is on the toggle button → do nothing (avoid conflict)
+                if self.volume_toggle_button.rect().contains(
+                        self.volume_toggle_button.mapFromGlobal(global_pos)
+                ):
+                    return False
+
+                # Any other click → close the panel
+                self.floating_volume_panel.hide()
+
+        return super().eventFilter(obj, event)
+
+
+    def update_responsive_ui(self):
+        container_size = self.main_widget.size()
+        w, h = container_size.width(), container_size.height()
+
+        self.update_pixmap(container_size)
+        if self.floating_volume_panel.isVisible():
+            self.floating_volume_panel.hide()
+
+        if w <=327:
+            mode = "XXS"
+        elif w <= 421:
+            mode = "XS"
+        elif w <= 482:
+            mode = "S"
+        elif w < 653:
+            mode = "M"
+        else:
+            mode = "L"
+
+
+        if mode != self.current_main_size:
+            self.current_main_size = mode
+
+            getattr(self, f"apply_{mode}_layout")()
+
+        self.track_inner_container.hide() if h <= 151 and w <= 482 else self.track_inner_container.show()
+
+
+    def update_pixmap(self, container_size):
         if self.original_pixmap.isNull():
             return
 
-        container_size = self.player_container.size()
+        ratio = self.image_container.width() / self.image_container.height()
 
-        # Escala la imagen manteniendo el aspect ratio, llenando el contenedor
-        scaled = self.original_pixmap.scaled(container_size,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            # Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
-        )
+        if ratio > 4 or self.image_container.height() < 100:
+            self.player_image.hide()
+            return
 
-        # Crear un pixmap del tamaño del contenedor
+        if self.view_player_image_action.isChecked():
+            self.player_image.show()
+
+        if 1.2 <= ratio <= 1.8:
+            # Scale the image while keeping aspect ratio
+            mode = Qt.AspectRatioMode.KeepAspectRatio
+        else:
+            # Scale the image while keeping aspect ratio, filling the container
+            mode = Qt.AspectRatioMode.KeepAspectRatioByExpanding
+
+        scaled = self.original_pixmap.scaled(container_size, mode, Qt.TransformationMode.SmoothTransformation)
+
+        # Create a pixmap with the size of the container
         final_pixmap = QPixmap(container_size)
-        final_pixmap.fill(Qt.GlobalColor.transparent)  # fondo transparente
+        final_pixmap.fill(Qt.GlobalColor.transparent)  # transparent background
 
-        # Coordenadas para centrar la imagen escalada
+        # Coordinates to center the scaled image
         x = (container_size.width() - scaled.width()) // 2
         y = (container_size.height() - scaled.height()) // 2
 
-        # Pegar la imagen escalada centrada
+        # Draw the scaled image centered
         painter = QPainter(final_pixmap)
         painter.drawPixmap(x, y, scaled)
         painter.end()
 
         self.player_image.setPixmap(final_pixmap)
 
-        # if scaled.width() > 300:
-        #     self.slider.setFixedWidth(scaled.width())
-        #     self.bottom_container.setFixedWidth(scaled.width())
+
+    def apply_XXS_layout(self):
+        self.set_volume_ui(False, 1)
+        self.set_track_name_layout(False)
+        self.set_ten_seconds_buttons(False)
+        self.set_shuffle_repeat(False)
 
 
-    def showEvent(self, event):
-        print("song_image size:", self.player_image.size())
-        self.update_pixmap()
-        super().showEvent(event)
+    def apply_XS_layout(self):
+        self.set_volume_ui(False, 1)
+        self.set_track_name_layout(False)
+        self.set_ten_seconds_buttons(False)
+        self.set_shuffle_repeat(True)
+
+
+    def apply_S_layout(self):
+        self.set_volume_ui(False, 1)
+        self.set_track_name_layout(False)
+        self.set_ten_seconds_buttons(True)
+        self.set_shuffle_repeat(True)
+
+
+    def apply_M_layout(self):
+        self.set_volume_ui(False, 1)
+        self.set_track_name_layout(True)
+        self.track_outer_container.setMinimumWidth(50)
+        self.set_ten_seconds_buttons(True)
+        self.set_shuffle_repeat(True)
+
+
+    def apply_L_layout(self):
+        self.set_volume_ui(True, 5)
+        self.set_track_name_layout(True)
+        self.track_outer_container.setMinimumWidth(136)
+        self.set_ten_seconds_buttons(True)
+        self.set_shuffle_repeat(True)
+
+
+    def set_volume_ui(self, show_slider, spacing):
+        self.volume_slider.setVisible(show_slider)
+        self.volume_toggle_button.setVisible(not show_slider)
+        self.volume_layout.setSpacing(spacing)
+        self.update_volume_button(self.player.is_muted)
+
+
+    def set_track_name_layout(self, is_large):
+        target = self.track_outer_layout if is_large else self.main_layout
+        index = 0 if is_large else 1
+        stretch = None if is_large else 1
+        margins = (0,0,0,0) if is_large else (9,0,9,5)
+
+        self.move_widget(self.track_inner_container, target, index, stretch)
+
+        self.track_inner_layout.setContentsMargins(*margins)
+
+        self.track_outer_container.setVisible(is_large)
+
+
+    def set_ten_seconds_buttons(self, show):
+        self.ten_forward_button.setVisible(show)
+        self.ten_backward_button.setVisible(show)
+
+
+    def set_shuffle_repeat(self, show):
+        self.shuffle_button.setVisible(show)
+        self.repeat_button.setVisible(show)
+
+
+    def move_widget(self, widget, target_layout, index, stretch=None):
+        current_layout = widget.parentWidget().layout()
+
+        if current_layout is not None and current_layout != target_layout:
+            current_layout.removeWidget(widget)
+
+        if stretch is None:
+            target_layout.insertWidget(index, widget)
+        else:
+            target_layout.insertWidget(index, widget, stretch)
+
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+
+        if self._bg_size != self.size():
+            self._bg_size = self.size()
+            self._bg_scaled = self._bg_pixmap.scaled(
+                self.size(),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation
+            )
+
+        x = (self.width() - self._bg_scaled.width()) // 2
+        y = (self.height() - self._bg_scaled.height()) // 2
+
+        painter.drawPixmap(x, y, self._bg_scaled)
+
+        super().paintEvent(event)
 
 
     def resizeEvent(self, event):
-        self.update_pixmap()
         super().resizeEvent(event)
 
+        QTimer.singleShot(0, self._apply_resize_rules)
+
+
+    def _apply_resize_rules(self):
+        h = self.height()
+
+        self.main_layout.setStretch(1, 1 if h < 220 else 0)
+        self.image_container.setVisible(h >= 216)
+        self.status_bar.setVisible(h >= 200)
+        self.menuBar().setVisible(h >= 140)
 
 
 if __name__ == '__main__':
     app  = QApplication(sys.argv)
+    with open("styles.css", "r") as file:
+        style = file.read()
+    app.setStyleSheet(style)
     # app.setFont(QFont("Arial", 12))
     window = MainWindow()
     sys.exit(app.exec())

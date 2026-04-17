@@ -1,59 +1,112 @@
-QMainWindow {
+/* QMainWindow {
   background-image: url(./images/background.jpg);
   background-position: center;
   background-repeat: no-repeat;
+} */
+
+QStatusBar, QToolTip {
+  color: rgba(208, 180, 250, 0.664);
+  background-color: rgba(8, 2, 34, 0.884);
+  padding: 3px;
 }
 
-QStatusBar {
-  background-color: rgb(53, 56, 73);
-}
-
-QMenuBar {
-  background-color: rgb(29, 29, 29);
+QMenuBar, QMenu {
+  background-color: rgba(8, 2, 34, 0.884);
   color: white;
 }
 
-QMenuBar::item:selected {
-  background-color: rgb(92, 95, 112);
+QMenuBar::item {
+  padding: 5px;
 }
 
-QMenuBar::item:pressed {
-  background-color: rgb(67, 70, 88);
+QMenuBar::item:selected, QMenu::item:selected {
+  color: rgb(24, 5, 53);
+  background-color: rgba(208, 180, 250, 0.664);  
 }
 
-QMenu::item:selected {
-  background-color: rgb(92, 95, 112);
-}
-
-QMenu::item:pressed {
-  background-color: rgb(67, 70, 88);
+QMenuBar::item:pressed, QMenu::item:pressed {
+  color: white;
+  background-color: rgba(96, 53, 160, 0.479);
 }
 
 QDockWidget {
-  color: white;
+  color: rgb(216, 212, 224);
   font-weight: bold;
   font-size: 14px;
+  background-color: rgb(74, 0, 120);
 }
 
-QListWidget {
+QListWidget, QWidget#custom_tab_widget {
   background-color: rgba(0, 0, 0, 0.3);
 }
 
+QWidget#dock_title_bar {
+  background-color: rgba(12, 3, 44, 0.911);
+}
+
+QWidget#dock_title_bar QLabel, QLabel#track_name {
+  color: rgba(255, 255, 255, 0.815);
+}
+
+QLabel#track_name {
+  border-radius: 15px;
+}
+
+QWidget#tabs_container {
+  padding: 2px 0 0 0;
+}
+
+QWidget#dock_title_bar QToolButton, QWidget#tabs_container QPushButton {
+  border: none;
+}
+
+QWidget#tabs_container QPushButton {
+  color: rgba(255, 255, 255, 0.815);
+  padding: 5px;
+  margin: 0.5px;
+}
+
+QWidget#dock_title_bar QToolButton:checked, QWidget#tabs_container QPushButton:checked {
+  background-color: rgba(96, 53, 160, 0.479);
+}
+
+QWidget#tabs_container QPushButton:hover {
+  color: rgb(24, 5, 53);
+  font-weight: 600;
+  border: 0.5px solid rgba(255, 255, 255, 0.815);
+}
+
+QWidget#dock_title_bar QToolButton:hover, QWidget#tabs_container QPushButton:hover {
+  background-color: rgba(208, 180, 250, 0.664);  
+}
+
+QWidget#tabs_container QPushButton:pressed {
+  background-color: rgba(179, 148, 227, 0.664);
+}
+
+QWidget#tabs_container {
+  background-color: rgba(12, 3, 44, 0.74);
+}
+
 QWidget#buttons_container {
-  background: rgba(255, 255, 255, 0.3);
+  background-color: rgba(208, 180, 250, 0.2);
   border-radius: 30px;
 }
 
-QPushButton {
-  background-color: rgba(0, 0, 0, 0.6);
+#buttons_container QPushButton {
+  background-color: rgba(5, 1, 20, 0.7);
 }
 
-QPushButton:hover {
+#volume_button, #volume_toggle_button {
+  background-color: rgba(5, 1, 20, 0.6);
+}
+
+#buttons_container QPushButton:hover, #volume_button:hover, #volume_toggle_button:hover {
   border: 1px solid white;
 }
 
-QPushButton:hover:pressed {
-  background-color: black !important;
+#buttons_container QPushButton:hover:pressed, #volume_button:pressed, #volume_toggle_button:pressed {
+  background-color: rgb(7, 1, 29) !important;
 }
 
 QPushButton#play_pause_button {
@@ -102,6 +155,82 @@ QPushButton#volume_button {
   image: url("./images/volume_on.png");
   border-radius: 15px;
   padding: 7px;
+}
+
+QPushButton#volume_toggle_button {
+  image: url("./images/arrow-up.png");
+  border-radius: 3px;
+  border-top-right-radius: 10px;
+  border-bottom-right-radius: 10px;
+  padding: 2px;
+  padding-right: 3.5px;
+}
+
+QSlider:horizontal {
+    background: transparent;
+    height: 25px;
+}
+
+/* Barra base (lo que no está recorrido) */
+QSlider::groove:horizontal {
+    background: rgba(208, 180, 250, 0.3);
+    height: 6px;
+    border-radius: 3px;
+}
+
+QSlider:vertical {
+    background: transparent;
+    width: 25px;
+}
+
+QSlider::groove:vertical {
+    background: rgba(208, 180, 250, 0.3);
+    width: 6px;
+    border-radius: 3px;
+}
+
+/* Parte activa (progreso) */
+QSlider::sub-page:horizontal {
+    background: #380885;
+    border-radius: 3px;
+}
+
+QSlider::add-page:vertical {
+    background: #380885;
+    border-radius: 3px;
+}
+
+/* Handle principal */
+QSlider::handle {
+    background: #380885;
+    width: 6px;
+    height: 6px;
+    border-radius: 8px;
+    border: 5px solid rgba(12, 3, 44, 0.9);
+}
+
+QSlider::handle:horizontal {
+    margin: -5px 0;
+}
+
+QSlider::handle:vertical {
+    margin: 0 -5px;
+}
+
+/* Hover del handle */
+QSlider::handle:hover {
+    width: 10px;
+    height: 10px;
+    border-width: 3px;
+}
+
+/* Presionado */
+QSlider::handle:pressed {
+  width: 10px;
+  height: 10px;
+  border-width: 3px;
+  background-color: rgba(20, 8, 65, 0.9);  
+  border-color: rgba(208, 180, 250, 0.9);
 }
 
 QScrollBar:vertical {
