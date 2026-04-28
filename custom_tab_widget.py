@@ -5,11 +5,11 @@ from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QSt
 class CustomTabWidget(QWidget):
     def __init__(self, tabs_data: list[list], parent=None):
         """
-        tabs_data: [tab_name, widget] list
+        tabs_data: [tab_name, widget, tooltip] list
         Example:
         [
-            ["Original List", self.playlist],
-            ["Queue List", self.queue_list]
+            ["Library", self.playlist, "Original order (never modified)"],
+            ["Queue", self.queue_list, "Current playback order (editable)"]
         ]
         """
         super().__init__(parent)

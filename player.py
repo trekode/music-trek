@@ -4,9 +4,9 @@ from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 
 class Player(QObject):
-    playback_state_changed = pyqtSignal(bool)  # True if it's playing
+    playback_state_changed = pyqtSignal(str)  # playing, paused or stopped
     track_changed = pyqtSignal(str)  # Emits current track path
-    playlist_changed = pyqtSignal(list)  # Because shuffle/unshuffle
+    playlist_changed = pyqtSignal(list)  # Because shuffle/unshuffle or added tracks
     shuffle_state_changed = pyqtSignal(bool)  # True if shuffle is on
     volume_state_changed = pyqtSignal(bool)  # True if volume is mute
     duration_changed = pyqtSignal(int)  # Duración del track en ms
@@ -22,10 +22,11 @@ class Player(QObject):
         self.audio_output.setVolume(0.70)
 
         self.original_track_list = []
+        self.pre_shuffle_track_list = None
         self.track_list = []
         self.current_track_index = None
 
-        self.is_playing = False
+        self.reproduction_mode = "stopped"  # playing, paused, stopped
         self.is_muted = False
         self.is_shuffle_on = False
         self.repeat = "none"  # none, all, one
@@ -37,13 +38,23 @@ class Player(QObject):
 
     # -------------------- TRACK LOADING --------------------
 
-    def set_tracks(self, track_paths: list):
-        self.original_track_list = track_paths.copy()
-        self.track_list = track_paths.copy()
-        if self.track_list:
-            if self.is_shuffle_on:
-                self.shuffle_tracks()
+    def set_tracks(self, track_paths: list, replace: bool = True):
+        if not track_paths:
+            return
+        track_paths = list(dict.fromkeys(track_paths))
+        is_addition = bool(self.track_list)
 
+        if replace:
+            self.original_track_list = track_paths.copy()
+            self.track_list = track_paths.copy()
+        else:
+            self.original_track_list.extend(track_paths)
+            self.track_list.extend(track_paths)
+
+        if self.is_shuffle_on:
+            self.shuffle_tracks(is_addition, track_paths)
+
+        if replace or self.current_track_index is None:
             self.current_track_index = 0
             self.load_current_track()
             self.play()
@@ -57,24 +68,35 @@ class Player(QObject):
             self.track_changed.emit(current_track_path)
 
 
+    def clear_source(self):
+        self.stop()
+        self.player.setSource(QUrl())
+
+
     # -------------------- REPRODUCTION CONTROL  --------------------
 
     def play(self):
         if self.player.source().isEmpty():
             return
         self.player.play()
-        self.is_playing = True
-        self.playback_state_changed.emit(self.is_playing)
+        self.reproduction_mode = "playing"
+        self.playback_state_changed.emit(self.reproduction_mode)
 
 
     def pause(self):
         self.player.pause()
-        self.is_playing = False
-        self.playback_state_changed.emit(self.is_playing)
+        self.reproduction_mode = "paused"
+        self.playback_state_changed.emit(self.reproduction_mode)
+
+
+    def stop(self):
+        self.player.stop()
+        self.reproduction_mode = "stopped"
+        self.playback_state_changed.emit(self.reproduction_mode)
 
 
     def play_pause(self):
-        if self.is_playing:
+        if self.reproduction_mode == "playing":
             self.pause()
         else:
             self.play()
@@ -89,11 +111,12 @@ class Player(QObject):
             if self.current_track_index >= len(self.track_list):
                 self.current_track_index = 0
                 if self.repeat == "none" and auto:
-                    self.pause()
+                    self.stop()
+                    self.track_changed.emit(self.get_current_track_path())
                     return
 
         self.load_current_track()
-        if self.is_playing:
+        if self.reproduction_mode == "playing":
             self.player.play()
 
 
@@ -107,7 +130,7 @@ class Player(QObject):
                 self.current_track_index = len(self.track_list)-1
 
         self.load_current_track()
-        if self.is_playing:
+        if self.reproduction_mode == "playing":
             self.player.play()
 
 
@@ -145,11 +168,16 @@ class Player(QObject):
         self.playlist_changed.emit(self.track_list)
 
 
-    def shuffle_tracks(self):
+    def shuffle_tracks(self, is_addition: bool = False, added_tracks=None):
         current_track = None
 
         if self.current_track_index is not None:
-            current_track = self.track_list[self.current_track_index]
+            current_track = self.get_current_track_path()
+
+        if is_addition and self.pre_shuffle_track_list is not None:
+            self.pre_shuffle_track_list = self.pre_shuffle_track_list + added_tracks
+        else:
+            self.pre_shuffle_track_list = self.track_list.copy()
 
         random.shuffle(self.track_list)
 
@@ -158,9 +186,16 @@ class Player(QObject):
 
 
     def unshuffle_tracks(self):
-        if self.current_track_index is not None:
-            current_track = self.track_list[self.current_track_index]
-            self.track_list = self.original_track_list.copy()
+        # if self.current_track_index is not None:
+        if not self.pre_shuffle_track_list:
+            return
+
+        current_track = self.get_current_track_path()
+
+        self.track_list = self.pre_shuffle_track_list.copy()
+        self.pre_shuffle_track_list = None
+
+        if current_track in self.track_list:
             self.current_track_index = self.track_list.index(current_track)
 
 
@@ -205,7 +240,36 @@ class Player(QObject):
         return None
 
 
-    # ---------------------------------------------------------
-
     def set_position(self, pos: int):
         self.player.setPosition(pos)
+
+
+    def remove_track(self, track_path):
+        if track_path not in self.track_list:
+            return
+
+        idx = self.track_list.index(track_path)
+        self.track_list.remove(track_path)
+        if self.pre_shuffle_track_list:
+            self.pre_shuffle_track_list.remove(track_path)
+
+        if self.track_list:
+            if self.current_track_index is not None:
+                if idx < self.current_track_index:
+                    self.current_track_index -= 1
+                elif idx == self.current_track_index:
+                    if self.current_track_index < len(self.track_list):
+                        self.load_current_track()
+                        self.play()
+                    else:
+                        self.current_track_index = 0
+                        self.load_current_track()
+                        self.stop()
+                    self.track_changed.emit(self.get_current_track_path())
+        else:
+            self.current_track_index = None
+            self.clear_source()
+            self.track_changed.emit(self.get_current_track_path())
+
+        self.playlist_changed.emit(self.track_list)
+
